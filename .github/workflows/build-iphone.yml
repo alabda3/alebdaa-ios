@@ -1,4 +1,3 @@
-
 name: Build Al-Ebdaa iPhone IPA
 
 on:
@@ -29,11 +28,41 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Create unsigned IPA
+      - name: Create and validate unsigned IPA
+        shell: bash
         run: |
+          set -euo pipefail
+          APP_SRC="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/الإبداع.app"
+          test -d "$APP_SRC" || { echo 'Built .app not found'; exit 1; }
+
           mkdir -p Payload
-          cp -R "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/الإبداع.app" Payload/
-          zip -qr alebdaa-unsigned.ipa Payload
+          ditto "$APP_SRC" "Payload/AlEbdaa.app"
+          PLIST="Payload/AlEbdaa.app/Info.plist"
+          test -f "$PLIST" || { echo 'Info.plist missing'; exit 1; }
+
+          OLD_EXEC=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")
+          test -f "Payload/AlEbdaa.app/$OLD_EXEC" || { echo 'Main executable missing'; exit 1; }
+
+          # Keep Arabic as the displayed app name, but use ASCII for IPA paths.
+          if [[ "$OLD_EXEC" != 'AlEbdaa' ]]; then
+            mv "Payload/AlEbdaa.app/$OLD_EXEC" "Payload/AlEbdaa.app/AlEbdaa"
+          fi
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable AlEbdaa' "$PLIST"
+          chmod 755 "Payload/AlEbdaa.app/AlEbdaa"
+
+          # Some signing tools require this iOS bundle declaration.
+          /usr/libexec/PlistBuddy -c 'Print :LSRequiresIPhoneOS' "$PLIST" >/dev/null 2>&1 || \
+            /usr/libexec/PlistBuddy -c 'Add :LSRequiresIPhoneOS bool true' "$PLIST"
+
+          echo 'Built executable:'
+          file 'Payload/AlEbdaa.app/AlEbdaa'
+          lipo -archs 'Payload/AlEbdaa.app/AlEbdaa' | grep -qw arm64 || \
+            { echo 'arm64 iPhone executable not found'; exit 1; }
+
+          zip -qry alebdaa-unsigned.ipa Payload
+          unzip -tq alebdaa-unsigned.ipa
+          unzip -Z -1 alebdaa-unsigned.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
+          echo 'IPA structure validated'
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
