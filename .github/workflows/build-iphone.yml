@@ -1,0 +1,42 @@
+
+name: Build Al-Ebdaa iPhone IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-iphone:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Get project
+        uses: actions/checkout@v4
+
+      - name: Build iPhone app
+        run: |
+          xcodebuild \
+            -project "src/الإبداع.xcodeproj" \
+            -scheme "الإبداع" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Create unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R "$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/الإبداع.app" Payload/
+          zip -qr alebdaa-unsigned.ipa Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: alebdaa-iphone-unsigned
+          path: alebdaa-unsigned.ipa
