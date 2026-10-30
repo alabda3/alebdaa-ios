@@ -15,6 +15,101 @@ jobs:
       - name: Get project
         uses: actions/checkout@v4
 
+      - name: Fix startup black screen in WKWebView
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          from pathlib import Path
+          import re
+          
+          path = Path('src/الإبداع/ViewController.swift')
+          code = path.read_text(encoding='utf-8')
+          
+          def edit_once(pattern, replacement, label):
+              global code
+              code, count = re.subn(pattern, lambda m: replacement, code, count=1, flags=re.S | re.M)
+              if count != 1:
+                  raise SystemExit(f'Cannot patch {label}: expected one match, got {count}')
+          
+          edit_once(
+              r'(?m)^[ \t]*initWebView\(\)\s*\n[ \t]*initToolbarView\(\)',
+              '''        initWebView()
+                  // Do not hide the entire store while waiting for a navigation callback.
+                  webviewView.backgroundColor = .white
+                  الإبداع.webView.backgroundColor = .white
+                  الإبداع.webView.isOpaque = false
+                  الإبداع.webView.isHidden = false
+                  loadingView.isHidden = true
+                  initToolbarView()''',
+              'viewDidLoad webview visibility'
+          )
+          
+          edit_once(
+              r'@objc\s+func\s+loadRootUrl\(cachePolicy:\s*NSURLRequest\.CachePolicy\s*=\s*\.useProtocolCachePolicy\)\s*\{[^}]*\}',
+              '''@objc func loadRootUrl(cachePolicy: NSURLRequest.CachePolicy = .useProtocolCachePolicy) {
+                  let storeURL = URL(string: "https://alabda3.github.io/store/?source=pwa")!
+                  let target = SceneDelegate.universalLinkToLaunch ?? SceneDelegate.shortcutLinkToLaunch ?? storeURL
+                  الإبداع.webView.load(URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25))
+              }''',
+              'store URL and cache handling'
+          )
+          
+          edit_once(
+              r'func webView\(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error\)\s*\{.*?(?=\n\s*override func observeValue)',
+              '''func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+                  if (error as NSError).code == NSURLErrorCancelled { return }
+                  htmlIsLoaded = false
+                  loadingView.isHidden = true
+                  webView.isHidden = false
+                  setProgress(0, false)
+                  NSLog("AlEbdaa WKWebView load failed: %@", error.localizedDescription)
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                      self?.showStoreLoadError(error.localizedDescription)
+                  }
+              }
+          
+              func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+                  self.webView(webView, didFailProvisionalNavigation: navigation, withError: error)
+              }
+          
+              private func showStoreLoadError(_ message: String) {
+                  guard view.window != nil, presentedViewController == nil else { return }
+                  let alert = UIAlertController(title: "تعذر تحميل متجر الإبداع", message: message, preferredStyle: .alert)
+                  alert.addAction(UIAlertAction(title: "إعادة المحاولة", style: .default) { [weak self] _ in
+                      self?.loadRootUrl()
+                  })
+                  alert.addAction(UIAlertAction(title: "فتح المتجر في Safari", style: .default) { _ in
+                      UIApplication.shared.open(URL(string: "https://alabda3.github.io/store/?source=pwa")!)
+                  })
+                  present(alert, animated: true)
+              }
+          
+              ''',
+              'navigation failure handling'
+          )
+          
+          edit_once(
+              r'الإبداع\.webView\.frame\s*=\s*calcWebviewFrame\(webviewView:\s*webviewView,\s*toolbarView:\s*nil\)',
+              'الإبداع.webView.frame = webviewView.bounds',
+              'webview layout'
+          )
+          
+          edit_once(
+              r'(?m)^[ \t]*loadRootUrl\(\)\s*\n[ \t]*NotificationCenter\.default\.addObserver',
+              '''        loadRootUrl()
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 18) { [weak self] in
+                      guard let self = self, !self.htmlIsLoaded else { return }
+                      self.showStoreLoadError("انتهت مهلة تحميل المتجر. جرّب إعادة المحاولة أو فتحه في Safari.")
+                  }
+                  NotificationCenter.default.addObserver''',
+              'navigation timeout'
+          )
+          
+          path.write_text(code, encoding='utf-8')
+          print('Patched ViewController.swift for visible webview and error reporting.')
+          PYCODE
+
       - name: Build iPhone app
         run: |
           xcodebuild \
