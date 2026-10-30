@@ -15,11 +15,11 @@ jobs:
       - name: Get project
         uses: actions/checkout@v4
 
-      - name: Create visible iPhone window and diagnose black screen
+      - name: Install clean iPhone storefront window
         shell: bash
         run: |
           set -euo pipefail
-          echo 'AL-EBDAA BLACK SCREEN DIAGNOSTIC BUILD V4'
+          echo 'AL-EBDAA PRODUCTION WEBVIEW BUILD V5'
           cat > 'src/الإبداع/SceneDelegate.swift' <<'SWIFT'
           import UIKit
           import WebKit
@@ -41,14 +41,14 @@ jobs:
                   newWindow.rootViewController = EbdaaBrowserViewController()
                   window = newWindow
                   newWindow.makeKeyAndVisible()
-                  NSLog("AlEbdaa: native window became visible (diagnostic V4)")
+                  NSLog("AlEbdaa: native window became visible (production V5)")
               }
           }
 
           @available(iOS 13.0, *)
           final class EbdaaBrowserViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
               private var browser: WKWebView!
-              private let statusLabel = UILabel()
+              private let errorNotice = UILabel()
               private var isLoaded = false
               private var attempt = 0
               private let storeURL = URL(string: "https://alabda3.github.io/store/?source=pwa")!
@@ -57,38 +57,22 @@ jobs:
                   super.viewDidLoad()
                   view.backgroundColor = .white
 
-                  let title = UILabel()
-                  title.text = "الإبداع • نسخة الفحص 4"
-                  title.font = .boldSystemFont(ofSize: 15)
-                  title.textColor = .black
-
-                  let reloadButton = UIButton(type: .system)
-                  reloadButton.setTitle("تحديث", for: .normal)
-                  reloadButton.addTarget(self, action: #selector(reloadStore), for: .touchUpInside)
-
-                  let safariButton = UIButton(type: .system)
-                  safariButton.setTitle("Safari", for: .normal)
-                  safariButton.addTarget(self, action: #selector(openSafari), for: .touchUpInside)
-
-                  let header = UIStackView(arrangedSubviews: [title, reloadButton, safariButton])
-                  header.axis = .horizontal
-                  header.alignment = .center
-                  header.spacing = 12
-                  header.isLayoutMarginsRelativeArrangement = true
-                  header.layoutMargins = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
-                  header.translatesAutoresizingMaskIntoConstraints = false
-                  header.backgroundColor = .white
-
-                  statusLabel.text = "جاري فتح المتجر..."
-                  statusLabel.font = .systemFont(ofSize: 12)
-                  statusLabel.textColor = .darkGray
-                  statusLabel.backgroundColor = UIColor(white: 0.94, alpha: 1)
-                  statusLabel.textAlignment = .center
-                  statusLabel.numberOfLines = 0
-                  statusLabel.translatesAutoresizingMaskIntoConstraints = false
-
                   let configuration = WKWebViewConfiguration()
                   configuration.allowsInlineMediaPlayback = true
+                  // The storefront shows an "install app" banner on the public website.
+                  // Suppress only that banner inside this native iOS wrapper.
+                  let hideInstallCTA = #"""
+                  (function () {
+                    var css = '#smartAppDownload, .smart-app-download { display: none !important; }';
+                    var style = document.createElement('style');
+                    style.textContent = css;
+                    (document.head || document.documentElement).appendChild(style);
+                  })();
+                  """#
+                  configuration.userContentController.addUserScript(
+                      WKUserScript(source: hideInstallCTA,
+                                   injectionTime: .atDocumentEnd,
+                                   forMainFrameOnly: true))
                   // Unlike the old wrapper, do not restrict WebKit to app-bound domains.
                   // Default behavior allows general web navigation.
 
@@ -101,24 +85,34 @@ jobs:
                   webView.uiDelegate = self
                   webView.allowsBackForwardNavigationGestures = true
                   browser = webView
-
-                  view.addSubview(header)
-                  view.addSubview(statusLabel)
+                  let refresher = UIRefreshControl()
+                  refresher.addTarget(self, action: #selector(reloadStore), for: .valueChanged)
+                  webView.scrollView.refreshControl = refresher
+                  // Keep native status bar; no diagnostic header or toolbar.
                   view.addSubview(webView)
                   let safe = view.safeAreaLayoutGuide
                   NSLayoutConstraint.activate([
-                      header.topAnchor.constraint(equalTo: safe.topAnchor),
-                      header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                      header.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                      header.heightAnchor.constraint(equalToConstant: 48),
-                      statusLabel.topAnchor.constraint(equalTo: header.bottomAnchor),
-                      statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                      statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                      statusLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
-                      webView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor),
+                      webView.topAnchor.constraint(equalTo: safe.topAnchor),
                       webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                       webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                       webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+                  ])
+                  errorNotice.isHidden = true
+                  errorNotice.text = "تعذر تحميل المتجر. اسحب للأسفل للمحاولة مرة ثانية."
+                  errorNotice.textAlignment = .center
+                  errorNotice.textColor = .white
+                  errorNotice.backgroundColor = UIColor(red: 0.66, green: 0.14, blue: 0.20, alpha: 0.96)
+                  errorNotice.font = .systemFont(ofSize: 14, weight: .medium)
+                  errorNotice.numberOfLines = 0
+                  errorNotice.layer.cornerRadius = 12
+                  errorNotice.clipsToBounds = true
+                  errorNotice.translatesAutoresizingMaskIntoConstraints = false
+                  view.addSubview(errorNotice)
+                  NSLayoutConstraint.activate([
+                      errorNotice.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                      errorNotice.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -16),
+                      errorNotice.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.90),
+                      errorNotice.heightAnchor.constraint(greaterThanOrEqualToConstant: 55)
                   ])
                   loadStore()
               }
@@ -127,32 +121,34 @@ jobs:
                   attempt += 1
                   let currentAttempt = attempt
                   isLoaded = false
-                  statusLabel.text = "جاري تحميل متجر الإبداع..."
+                  errorNotice.isHidden = true
                   browser.load(URLRequest(url: storeURL,
                                           cachePolicy: .reloadIgnoringLocalCacheData,
                                           timeoutInterval: 25))
                   DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
                       guard let self = self, self.attempt == currentAttempt, !self.isLoaded else { return }
-                      self.statusLabel.text = "التحميل متأخر. اضغط تحديث أو Safari."
+                      NSLog("AlEbdaa: loading slower than expected")
                   }
               }
 
               @objc private func reloadStore() { loadStore() }
-              @objc private func openSafari() { UIApplication.shared.open(storeURL) }
 
               func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-                  statusLabel.text = "جاري الاتصال بالمتجر..."
+                  NSLog("AlEbdaa: loading the store")
               }
 
               func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
                   isLoaded = true
-                  statusLabel.text = "تم تحميل الصفحة داخل التطبيق ✓"
+                  errorNotice.isHidden = true
+                  webView.scrollView.refreshControl?.endRefreshing()
+                  NSLog("AlEbdaa: store loaded successfully")
                   NSLog("AlEbdaa: web navigation finished: %@", webView.url?.absoluteString ?? "unknown")
               }
 
               private func showError(_ error: Error) {
                   isLoaded = false
-                  statusLabel.text = "خطأ التحميل: \(error.localizedDescription)"
+                  browser.scrollView.refreshControl?.endRefreshing()
+                  errorNotice.isHidden = false
                   NSLog("AlEbdaa web error: %@", error.localizedDescription)
               }
 
@@ -169,7 +165,7 @@ jobs:
               }
 
               func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-                  statusLabel.text = "أُعيد تشغيل صفحة المتجر بعد توقف WebKit."
+                  NSLog("AlEbdaa: WebKit process restarted")
                   loadStore()
               }
 
@@ -211,7 +207,7 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Delete :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneStoryboardFile' "$PLIST" || true
           /usr/libexec/PlistBuddy -c 'Delete :WKAppBoundDomains' "$PLIST" || true
           plutil -lint "$PLIST"
-          echo 'Diagnostic startup window installed.'
+          echo 'Clean storefront startup window installed.'
 
       - name: Build iPhone app
         shell: bash
@@ -224,7 +220,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CURRENT_PROJECT_VERSION=4 \
+            CURRENT_PROJECT_VERSION=5 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build 2>&1 | tee build-output.log
@@ -233,11 +229,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alebdaa-xcode-build-log-v4
+          name: alebdaa-xcode-build-log-v5
           path: build-output.log
           if-no-files-found: ignore
 
-      - name: Create and validate diagnostic IPA
+      - name: Create and validate clean IPA
         shell: bash
         run: |
           set -euo pipefail
@@ -257,13 +253,13 @@ jobs:
           file 'Payload/AlEbdaa.app/AlEbdaa'
           lipo -archs 'Payload/AlEbdaa.app/AlEbdaa' | grep -qw arm64
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST"
-          zip -qry alebdaa-diagnostic-v4.ipa Payload
-          unzip -tq alebdaa-diagnostic-v4.ipa
-          unzip -Z -1 alebdaa-diagnostic-v4.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
-          echo 'Diagnostic IPA V4 validated'
+          zip -qry alebdaa-clean-v5.ipa Payload
+          unzip -tq alebdaa-clean-v5.ipa
+          unzip -Z -1 alebdaa-clean-v5.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
+          echo 'Clean IPA V5 validated'
 
-      - name: Upload diagnostic IPA
+      - name: Upload clean IPA
         uses: actions/upload-artifact@v4
         with:
-          name: alebdaa-diagnostic-v4
-          path: alebdaa-diagnostic-v4.ipa
+          name: alebdaa-iphone-clean-v5
+          path: alebdaa-clean-v5.ipa
