@@ -15,152 +15,244 @@ jobs:
       - name: Get project
         uses: actions/checkout@v4
 
-      - name: Fix startup black screen in WKWebView
+      - name: Create visible iPhone window and diagnose black screen
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PYCODE'
-          from pathlib import Path
-          import re
-          
-          path = Path('src/الإبداع/ViewController.swift')
-          code = path.read_text(encoding='utf-8')
-          
-          def edit_once(pattern, replacement, label):
-              global code
-              code, count = re.subn(pattern, lambda m: replacement, code, count=1, flags=re.S | re.M)
-              if count != 1:
-                  raise SystemExit(f'Cannot patch {label}: expected one match, got {count}')
-          
-          edit_once(
-              r'(?m)^[ \t]*initWebView\(\)\s*\n[ \t]*initToolbarView\(\)',
-              '''        initWebView()
-                  // Do not hide the entire store while waiting for a navigation callback.
-                  webviewView.backgroundColor = .white
-                  الإبداع.webView.backgroundColor = .white
-                  الإبداع.webView.isOpaque = false
-                  الإبداع.webView.isHidden = false
-                  loadingView.isHidden = true
-                  initToolbarView()''',
-              'viewDidLoad webview visibility'
-          )
-          
-          edit_once(
-              r'@objc\s+func\s+loadRootUrl\(cachePolicy:\s*NSURLRequest\.CachePolicy\s*=\s*\.useProtocolCachePolicy\)\s*\{[^}]*\}',
-              '''@objc func loadRootUrl(cachePolicy: NSURLRequest.CachePolicy = .useProtocolCachePolicy) {
-                  let storeURL = URL(string: "https://alabda3.github.io/store/?source=pwa")!
-                  let target = SceneDelegate.universalLinkToLaunch ?? SceneDelegate.shortcutLinkToLaunch ?? storeURL
-                  الإبداع.webView.load(URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 25))
-              }''',
-              'store URL and cache handling'
-          )
-          
-          edit_once(
-              r'func webView\(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error\)\s*\{.*?(?=\n\s*override func observeValue)',
-              '''func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-                  if (error as NSError).code == NSURLErrorCancelled { return }
-                  htmlIsLoaded = false
-                  loadingView.isHidden = true
-                  webView.isHidden = false
-                  setProgress(0, false)
-                  NSLog("AlEbdaa WKWebView load failed: %@", error.localizedDescription)
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                      self?.showStoreLoadError(error.localizedDescription)
+          echo 'AL-EBDAA BLACK SCREEN DIAGNOSTIC BUILD V3'
+          cat > 'src/الإبداع/SceneDelegate.swift' <<'SWIFT'
+          import UIKit
+          import WebKit
+
+          @available(iOS 13.0, *)
+          @objc(EbdaaSceneDelegate)
+          final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+              var window: UIWindow?
+
+              func scene(_ scene: UIScene,
+                         willConnectTo session: UISceneSession,
+                         options connectionOptions: UIScene.ConnectionOptions) {
+                  guard let windowScene = scene as? UIWindowScene else { return }
+                  let newWindow = UIWindow(windowScene: windowScene)
+                  newWindow.backgroundColor = .white
+                  newWindow.rootViewController = EbdaaBrowserViewController()
+                  window = newWindow
+                  newWindow.makeKeyAndVisible()
+                  NSLog("AlEbdaa: native window became visible (diagnostic V3)")
+              }
+          }
+
+          @available(iOS 13.0, *)
+          final class EbdaaBrowserViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
+              private var browser: WKWebView!
+              private let statusLabel = UILabel()
+              private var isLoaded = false
+              private var attempt = 0
+              private let storeURL = URL(string: "https://alabda3.github.io/store/?source=pwa")!
+
+              override func viewDidLoad() {
+                  super.viewDidLoad()
+                  view.backgroundColor = .white
+
+                  let title = UILabel()
+                  title.text = "الإبداع • نسخة الفحص 3"
+                  title.font = .boldSystemFont(ofSize: 15)
+                  title.textColor = .black
+
+                  let reloadButton = UIButton(type: .system)
+                  reloadButton.setTitle("تحديث", for: .normal)
+                  reloadButton.addTarget(self, action: #selector(reloadStore), for: .touchUpInside)
+
+                  let safariButton = UIButton(type: .system)
+                  safariButton.setTitle("Safari", for: .normal)
+                  safariButton.addTarget(self, action: #selector(openSafari), for: .touchUpInside)
+
+                  let header = UIStackView(arrangedSubviews: [title, reloadButton, safariButton])
+                  header.axis = .horizontal
+                  header.alignment = .center
+                  header.spacing = 12
+                  header.isLayoutMarginsRelativeArrangement = true
+                  header.layoutMargins = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+                  header.translatesAutoresizingMaskIntoConstraints = false
+                  header.backgroundColor = .white
+
+                  statusLabel.text = "جاري فتح المتجر..."
+                  statusLabel.font = .systemFont(ofSize: 12)
+                  statusLabel.textColor = .darkGray
+                  statusLabel.backgroundColor = UIColor(white: 0.94, alpha: 1)
+                  statusLabel.textAlignment = .center
+                  statusLabel.numberOfLines = 0
+                  statusLabel.translatesAutoresizingMaskIntoConstraints = false
+
+                  let configuration = WKWebViewConfiguration()
+                  configuration.allowsInlineMediaPlayback = true
+                  // Unlike the old wrapper, do not restrict WebKit to app-bound domains.
+                  configuration.limitsNavigationsToAppBoundDomains = false
+
+                  let webView = WKWebView(frame: .zero, configuration: configuration)
+                  webView.translatesAutoresizingMaskIntoConstraints = false
+                  webView.backgroundColor = .white
+                  webView.scrollView.backgroundColor = .white
+                  webView.isOpaque = false
+                  webView.navigationDelegate = self
+                  webView.uiDelegate = self
+                  webView.allowsBackForwardNavigationGestures = true
+                  browser = webView
+
+                  view.addSubview(header)
+                  view.addSubview(statusLabel)
+                  view.addSubview(webView)
+                  let safe = view.safeAreaLayoutGuide
+                  NSLayoutConstraint.activate([
+                      header.topAnchor.constraint(equalTo: safe.topAnchor),
+                      header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                      header.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                      header.heightAnchor.constraint(equalToConstant: 48),
+                      statusLabel.topAnchor.constraint(equalTo: header.bottomAnchor),
+                      statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                      statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                      statusLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
+                      webView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor),
+                      webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                      webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                      webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+                  ])
+                  loadStore()
+              }
+
+              private func loadStore() {
+                  attempt += 1
+                  let currentAttempt = attempt
+                  isLoaded = false
+                  statusLabel.text = "جاري تحميل متجر الإبداع..."
+                  browser.load(URLRequest(url: storeURL,
+                                          cachePolicy: .reloadIgnoringLocalCacheData,
+                                          timeoutInterval: 25))
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+                      guard let self = self, self.attempt == currentAttempt, !self.isLoaded else { return }
+                      self.statusLabel.text = "التحميل متأخر. اضغط تحديث أو Safari."
                   }
               }
-          
-              func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-                  self.webView(webView, didFailProvisionalNavigation: navigation, withError: error)
+
+              @objc private func reloadStore() { loadStore() }
+              @objc private func openSafari() { UIApplication.shared.open(storeURL) }
+
+              func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+                  statusLabel.text = "جاري الاتصال بالمتجر..."
               }
-          
-              private func showStoreLoadError(_ message: String) {
-                  guard view.window != nil, presentedViewController == nil else { return }
-                  let alert = UIAlertController(title: "تعذر تحميل متجر الإبداع", message: message, preferredStyle: .alert)
-                  alert.addAction(UIAlertAction(title: "إعادة المحاولة", style: .default) { [weak self] _ in
-                      self?.loadRootUrl()
-                  })
-                  alert.addAction(UIAlertAction(title: "فتح المتجر في Safari", style: .default) { _ in
-                      UIApplication.shared.open(URL(string: "https://alabda3.github.io/store/?source=pwa")!)
-                  })
-                  present(alert, animated: true)
+
+              func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+                  isLoaded = true
+                  statusLabel.text = "تم تحميل الصفحة داخل التطبيق ✓"
+                  NSLog("AlEbdaa: web navigation finished: %@", webView.url?.absoluteString ?? "unknown")
               }
-          
-              ''',
-              'navigation failure handling'
-          )
-          
-          edit_once(
-              r'الإبداع\.webView\.frame\s*=\s*calcWebviewFrame\(webviewView:\s*webviewView,\s*toolbarView:\s*nil\)',
-              'الإبداع.webView.frame = webviewView.bounds',
-              'webview layout'
-          )
-          
-          edit_once(
-              r'(?m)^[ \t]*loadRootUrl\(\)\s*\n[ \t]*NotificationCenter\.default\.addObserver',
-              '''        loadRootUrl()
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 18) { [weak self] in
-                      guard let self = self, !self.htmlIsLoaded else { return }
-                      self.showStoreLoadError("انتهت مهلة تحميل المتجر. جرّب إعادة المحاولة أو فتحه في Safari.")
+
+              private func showError(_ error: Error) {
+                  isLoaded = false
+                  statusLabel.text = "خطأ التحميل: \(error.localizedDescription)"
+                  NSLog("AlEbdaa web error: %@", error.localizedDescription)
+              }
+
+              func webView(_ webView: WKWebView,
+                           didFailProvisionalNavigation navigation: WKNavigation!,
+                           withError error: Error) {
+                  if (error as NSError).code != NSURLErrorCancelled { showError(error) }
+              }
+
+              func webView(_ webView: WKWebView,
+                           didFail navigation: WKNavigation!,
+                           withError error: Error) {
+                  if (error as NSError).code != NSURLErrorCancelled { showError(error) }
+              }
+
+              func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+                  statusLabel.text = "أُعيد تشغيل صفحة المتجر بعد توقف WebKit."
+                  loadStore()
+              }
+
+              func webView(_ webView: WKWebView,
+                           createWebViewWith configuration: WKWebViewConfiguration,
+                           for navigationAction: WKNavigationAction,
+                           windowFeatures: WKWindowFeatures) -> WKWebView? {
+                  if let url = navigationAction.request.url { UIApplication.shared.open(url) }
+                  return nil
+              }
+
+              func webView(_ webView: WKWebView,
+                           decidePolicyFor navigationAction: WKNavigationAction,
+                           decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                  guard let url = navigationAction.request.url else {
+                      decisionHandler(.allow)
+                      return
                   }
-                  NotificationCenter.default.addObserver''',
-              'navigation timeout'
-          )
-          
-          path.write_text(code, encoding='utf-8')
-          print('Patched ViewController.swift for visible webview and error reporting.')
-          PYCODE
+                  if navigationAction.navigationType == .linkActivated,
+                     url.scheme != "https" || url.host == nil {
+                      decisionHandler(.cancel)
+                      UIApplication.shared.open(url)
+                      return
+                  }
+                  if navigationAction.navigationType == .linkActivated,
+                     let host = url.host,
+                     host != "alabda3.github.io" {
+                      decisionHandler(.cancel)
+                      UIApplication.shared.open(url)
+                      return
+                  }
+                  decisionHandler(.allow)
+              }
+          }
+          SWIFT
+          PLIST='src/الإبداع/Info.plist'
+          /usr/libexec/PlistBuddy -c 'Set :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneDelegateClassName EbdaaSceneDelegate' "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Delete :UIMainStoryboardFile' "$PLIST" || true
+          /usr/libexec/PlistBuddy -c 'Delete :UIApplicationSceneManifest:UISceneConfigurations:UIWindowSceneSessionRoleApplication:0:UISceneStoryboardFile' "$PLIST" || true
+          /usr/libexec/PlistBuddy -c 'Delete :WKAppBoundDomains' "$PLIST" || true
+          plutil -lint "$PLIST"
+          echo 'Diagnostic startup window installed.'
 
       - name: Build iPhone app
+        shell: bash
         run: |
+          set -euo pipefail
           xcodebuild \
-            -project "src/الإبداع.xcodeproj" \
-            -scheme "الإبداع" \
+            -project 'src/الإبداع.xcodeproj' \
+            -scheme 'الإبداع' \
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CURRENT_PROJECT_VERSION=3 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Create and validate unsigned IPA
+      - name: Create and validate diagnostic IPA
         shell: bash
         run: |
           set -euo pipefail
           APP_SRC="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/الإبداع.app"
           test -d "$APP_SRC" || { echo 'Built .app not found'; exit 1; }
-
           mkdir -p Payload
-          ditto "$APP_SRC" "Payload/AlEbdaa.app"
-          PLIST="Payload/AlEbdaa.app/Info.plist"
+          ditto "$APP_SRC" 'Payload/AlEbdaa.app'
+          PLIST='Payload/AlEbdaa.app/Info.plist'
           test -f "$PLIST" || { echo 'Info.plist missing'; exit 1; }
-
           OLD_EXEC=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")
           test -f "Payload/AlEbdaa.app/$OLD_EXEC" || { echo 'Main executable missing'; exit 1; }
-
-          # Keep Arabic as the displayed app name, but use ASCII for IPA paths.
           if [[ "$OLD_EXEC" != 'AlEbdaa' ]]; then
-            mv "Payload/AlEbdaa.app/$OLD_EXEC" "Payload/AlEbdaa.app/AlEbdaa"
+            mv "Payload/AlEbdaa.app/$OLD_EXEC" 'Payload/AlEbdaa.app/AlEbdaa'
           fi
           /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable AlEbdaa' "$PLIST"
-          chmod 755 "Payload/AlEbdaa.app/AlEbdaa"
-
-          # Some signing tools require this iOS bundle declaration.
-          /usr/libexec/PlistBuddy -c 'Print :LSRequiresIPhoneOS' "$PLIST" >/dev/null 2>&1 || \
-            /usr/libexec/PlistBuddy -c 'Add :LSRequiresIPhoneOS bool true' "$PLIST"
-
-          echo 'Built executable:'
+          chmod 755 'Payload/AlEbdaa.app/AlEbdaa'
           file 'Payload/AlEbdaa.app/AlEbdaa'
-          lipo -archs 'Payload/AlEbdaa.app/AlEbdaa' | grep -qw arm64 || \
-            { echo 'arm64 iPhone executable not found'; exit 1; }
+          lipo -archs 'Payload/AlEbdaa.app/AlEbdaa' | grep -qw arm64
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST"
+          zip -qry alebdaa-diagnostic-v3.ipa Payload
+          unzip -tq alebdaa-diagnostic-v3.ipa
+          unzip -Z -1 alebdaa-diagnostic-v3.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
+          echo 'Diagnostic IPA V3 validated'
 
-          zip -qry alebdaa-unsigned.ipa Payload
-          unzip -tq alebdaa-unsigned.ipa
-          unzip -Z -1 alebdaa-unsigned.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
-          echo 'IPA structure validated'
-
-      - name: Upload IPA
+      - name: Upload diagnostic IPA
         uses: actions/upload-artifact@v4
         with:
-          name: alebdaa-iphone-unsigned
-          path: alebdaa-unsigned.ipa
+          name: alebdaa-diagnostic-v3
+          path: alebdaa-diagnostic-v3.ipa
