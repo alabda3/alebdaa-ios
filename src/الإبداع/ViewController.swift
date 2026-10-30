@@ -1,6 +1,10 @@
 import UIKit
 import WebKit
 
+enum الإبداع {
+    static var webView: WKWebView!
+}
+
 var webView: WKWebView! = nil
 
 class ViewController: UIViewController, WKNavigationDelegate, UIDocumentInteractionControllerDelegate {
