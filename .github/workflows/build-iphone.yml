@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo 'AL-EBDAA BLACK SCREEN DIAGNOSTIC BUILD V3'
+          echo 'AL-EBDAA BLACK SCREEN DIAGNOSTIC BUILD V4'
           cat > 'src/الإبداع/SceneDelegate.swift' <<'SWIFT'
           import UIKit
           import WebKit
@@ -28,6 +28,9 @@ jobs:
           @objc(EbdaaSceneDelegate)
           final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
               var window: UIWindow?
+              // Referenced by legacy ViewController.swift, which is still compiled.
+              static var universalLinkToLaunch: URL? = nil
+              static var shortcutLinkToLaunch: URL? = nil
 
               func scene(_ scene: UIScene,
                          willConnectTo session: UISceneSession,
@@ -38,7 +41,7 @@ jobs:
                   newWindow.rootViewController = EbdaaBrowserViewController()
                   window = newWindow
                   newWindow.makeKeyAndVisible()
-                  NSLog("AlEbdaa: native window became visible (diagnostic V3)")
+                  NSLog("AlEbdaa: native window became visible (diagnostic V4)")
               }
           }
 
@@ -55,7 +58,7 @@ jobs:
                   view.backgroundColor = .white
 
                   let title = UILabel()
-                  title.text = "الإبداع • نسخة الفحص 3"
+                  title.text = "الإبداع • نسخة الفحص 4"
                   title.font = .boldSystemFont(ofSize: 15)
                   title.textColor = .black
 
@@ -87,7 +90,7 @@ jobs:
                   let configuration = WKWebViewConfiguration()
                   configuration.allowsInlineMediaPlayback = true
                   // Unlike the old wrapper, do not restrict WebKit to app-bound domains.
-                  configuration.limitsNavigationsToAppBoundDomains = false
+                  // Default behavior allows general web navigation.
 
                   let webView = WKWebView(frame: .zero, configuration: configuration)
                   webView.translatesAutoresizingMaskIntoConstraints = false
@@ -221,10 +224,18 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
-            CURRENT_PROJECT_VERSION=3 \
+            CURRENT_PROJECT_VERSION=4 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build
+            build 2>&1 | tee build-output.log
+
+      - name: Upload Xcode build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alebdaa-xcode-build-log-v4
+          path: build-output.log
+          if-no-files-found: ignore
 
       - name: Create and validate diagnostic IPA
         shell: bash
@@ -246,13 +257,13 @@ jobs:
           file 'Payload/AlEbdaa.app/AlEbdaa'
           lipo -archs 'Payload/AlEbdaa.app/AlEbdaa' | grep -qw arm64
           /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST"
-          zip -qry alebdaa-diagnostic-v3.ipa Payload
-          unzip -tq alebdaa-diagnostic-v3.ipa
-          unzip -Z -1 alebdaa-diagnostic-v3.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
-          echo 'Diagnostic IPA V3 validated'
+          zip -qry alebdaa-diagnostic-v4.ipa Payload
+          unzip -tq alebdaa-diagnostic-v4.ipa
+          unzip -Z -1 alebdaa-diagnostic-v4.ipa | grep -Fx 'Payload/AlEbdaa.app/AlEbdaa'
+          echo 'Diagnostic IPA V4 validated'
 
       - name: Upload diagnostic IPA
         uses: actions/upload-artifact@v4
         with:
-          name: alebdaa-diagnostic-v3
-          path: alebdaa-diagnostic-v3.ipa
+          name: alebdaa-diagnostic-v4
+          path: alebdaa-diagnostic-v4.ipa
